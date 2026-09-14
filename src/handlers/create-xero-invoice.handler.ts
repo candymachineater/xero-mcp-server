@@ -1,8 +1,8 @@
-import { xeroClient } from "../clients/xero-client.js";
 import { XeroClientResponse } from "../types/tool-response.js";
 import { formatError } from "../helpers/format-error.js";
 import { Invoice, LineItemTracking } from "xero-node";
 import { getClientHeaders } from "../helpers/get-client-headers.js";
+import { invoiceCreateControlsSchema, InvoiceCreateControls } from "../helpers/invoice-create-controls.js";
 
 interface InvoiceLineItem {
   description: string;
@@ -20,7 +20,9 @@ async function createInvoice(
   type: Invoice.TypeEnum,
   reference: string | undefined,
   date: string | undefined,
+  controls: InvoiceCreateControls,
 ): Promise<Invoice | undefined> {
+  const { xeroClient } = await import("../clients/xero-client.js");
   await xeroClient.authenticate();
 
   const invoice: Invoice = {
@@ -30,7 +32,7 @@ async function createInvoice(
     },
     lineItems: lineItems,
     date: date || new Date().toISOString().split("T")[0], // Use provided date or today's date
-    dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+    dueDate: controls.dueDate ?? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
       .toISOString()
       .split("T")[0], // 30 days from now
     ...(type === Invoice.TypeEnum.ACCPAY
@@ -62,14 +64,18 @@ export async function createXeroInvoice(
   type: Invoice.TypeEnum = Invoice.TypeEnum.ACCREC,
   reference?: string,
   date?: string,
+  controls: InvoiceCreateControls = {},
 ): Promise<XeroClientResponse<Invoice>> {
   try {
+    // Public callers may bypass the MCP schema. Validate before loading the client.
+    const parsedControls = invoiceCreateControlsSchema.parse(controls);
     const createdInvoice = await createInvoice(
       contactId,
       lineItems,
       type,
       reference,
       date,
+      parsedControls,
     );
 
     if (!createdInvoice) {

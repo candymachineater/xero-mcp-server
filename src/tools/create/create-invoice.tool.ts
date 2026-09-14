@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { createXeroInvoice } from "../../handlers/create-xero-invoice.handler.js";
-import { DeepLinkType, getDeepLink } from "../../helpers/get-deeplink.js";
 import { CreateXeroTool } from "../../helpers/create-xero-tool.js";
 import { Invoice } from "xero-node";
+import { invoiceCreateControlsSchema } from "../../helpers/invoice-create-controls.js";
 
 const trackingSchema = z.object({
   name: z.string().describe("The name of the tracking category. Can be obtained from the list-tracking-categories tool"),
@@ -26,7 +26,7 @@ const lineItemSchema = z.object({
 
 const CreateInvoiceTool = CreateXeroTool(
   "create-invoice",
-  "Create an invoice in Xero.\
+  "Create a DRAFT invoice in Xero.\
  When an invoice is created, a deep link to the invoice in Xero is returned. \
  This deep link can be used to view the invoice in Xero directly. \
  This link should be displayed to the user.",
@@ -41,10 +41,11 @@ const CreateInvoiceTool = CreateXeroTool(
       If the type is not specified, the default is ACCREC."),
     reference: z.string().describe("A reference number for the invoice.").optional(),
     date: z.string().describe("The date the invoice was created (YYYY-MM-DD format).").optional(),
+    ...invoiceCreateControlsSchema.shape,
   },
-  async ({ contactId, lineItems, type, reference, date }) => {
+  async ({ contactId, lineItems, type, reference, date, status, dueDate }) => {
     const xeroInvoiceType = type === "ACCREC" ? Invoice.TypeEnum.ACCREC : Invoice.TypeEnum.ACCPAY;
-    const result = await createXeroInvoice(contactId, lineItems, xeroInvoiceType, reference, date);
+    const result = await createXeroInvoice(contactId, lineItems, xeroInvoiceType, reference, date, { status, dueDate });
     if (result.isError) {
       return {
         content: [
@@ -58,12 +59,15 @@ const CreateInvoiceTool = CreateXeroTool(
 
     const invoice = result.result;
 
-    const deepLink = invoice.invoiceID
-      ? await getDeepLink(
-          invoice.type === Invoice.TypeEnum.ACCREC ? DeepLinkType.INVOICE : DeepLinkType.BILL,
-          invoice.invoiceID,
-        )
-      : null;
+    let deepLink: string | null | undefined = null;
+    if (invoice.invoiceID) {
+      // This helper also imports the client; load it only after validated creation.
+      const { DeepLinkType, getDeepLink } = await import("../../helpers/get-deeplink.js");
+      deepLink = await getDeepLink(
+        invoice.type === Invoice.TypeEnum.ACCREC ? DeepLinkType.INVOICE : DeepLinkType.BILL,
+        invoice.invoiceID,
+      );
+    }
 
     return {
       content: [
@@ -75,6 +79,7 @@ const CreateInvoiceTool = CreateXeroTool(
             `Contact: ${invoice?.contact?.name}`,
             `Type: ${invoice?.type}`,
             `Date: ${invoice?.date}`,
+            invoice?.dueDate ? `Due date: ${invoice.dueDate}` : null,
             `Total: ${invoice?.total}`,
             `Status: ${invoice?.status}`,
             deepLink ? `Link to view: ${deepLink}` : null,
