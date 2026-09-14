@@ -191,6 +191,38 @@ payroll.timesheets
 
 For detailed API documentation, please refer to the [MCP Protocol Specification](https://modelcontextprotocol.io/).
 
+### Invoice creation: draft safety and payment terms
+
+`create-invoice` always creates a **DRAFT** invoice. Optional `status` accepts only
+`"DRAFT"`; it does not authorise or send invoices. Optional `dueDate` must be a real
+`YYYY-MM-DD` calendar date (years 0001–9999), not a timestamp, null, or newline-padded
+value. These controls are validated at both the MCP tool and public handler boundaries
+before this path loads/authenticates the Xero client or writes an invoice.
+
+An explicit `dueDate` wins unchanged. Select the payment terms in the calling
+application/bot policy and pass the resolved calendar date **at creation**, rather
+than creating an invoice with the wrong terms and repairing it afterwards. This
+connector does not choose terms, count working days, select a jurisdiction/holiday
+calendar, or reinterpret date-only values as UTC instants. A caller with a default
+such as 14 working days must resolve its invoice-date basis and applicable calendar
+before calling, and explicitly pass `dueDate`. Specific agreed/selected terms take
+precedence over that caller default; do not retrofit existing invoices.
+
+For backward compatibility, omitted `dueDate` still means the **UTC date of runtime
+now plus 30 elapsed days**, independent of the invoice `date`. Omitted `status`
+remains DRAFT. Omitted (or empty) `date` still uses today's UTC date. These are legacy
+connector defaults, not a recommended payment-terms policy. Always provide the
+intended invoice `date` and `dueDate` when calendar dates matter. For example, an
+explicitly selected seven-calendar-day term for invoice date `2026-09-15` can be
+represented as `date: "2026-09-15", dueDate: "2026-09-22", status: "DRAFT"`; this
+example is not a universal default or a working-day calculation.
+
+Both ACCREC invoices and ACCPAY bills support these controls. Existing line items,
+reference-to-invoice-number mapping for ACCPAY, and all other defaults are unchanged.
+The creation result includes Xero's returned due date when available. Deployment of
+this source and the calling bot's payment policy are separate changes; installing a
+policy alone cannot add missing fields to an older connector's tool schema.
+
 ## For Developers
 
 ### Installation
