@@ -356,3 +356,65 @@ describe("createXeroInvoiceAttachment", () => {
     });
   });
 });
+
+describe("createXeroInvoiceAttachment error surfacing", () => {
+  /** Same stringified ApiError envelope xero-node 13.3.0 rejects with. */
+  function sdkRejection(status: number, body: unknown): string {
+    return JSON.stringify({
+      response: {
+        statusCode: status,
+        body,
+        headers: { "set-cookie": "ak_bmsc=COOKIE_SECRET; path=/" },
+        request: {
+          headers: {
+            authorization: "Bearer eyJSECRETTOKEN.payload.signature",
+            "xero-tenant-id": "tenant-123",
+          },
+          method: "PUT",
+        },
+      },
+      body,
+    });
+  }
+
+  it("reports the status and Xero error body from the upload call", async () => {
+    api.createInvoiceAttachmentByFileName.mockRejectedValue(
+      sdkRejection(403, {
+        Title: "Forbidden",
+        Detail: "AuthorizationUnsuccessful",
+      }),
+    );
+
+    const result = await createXeroInvoiceAttachment(
+      "inv-1",
+      "claims-progress.pdf",
+      "application/pdf",
+      CONTENT,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.result).toBeNull();
+    expect(result.error).toBe("403 Forbidden: AuthorizationUnsuccessful");
+    expect(result.error).not.toContain("Bearer");
+    expect(result.error).not.toContain("eyJSECRETTOKEN");
+    expect(result.error).not.toContain("COOKIE_SECRET");
+  });
+
+  it("reports the status and body when the pre-upload listing call fails", async () => {
+    api.getInvoiceAttachments.mockRejectedValue(
+      sdkRejection(403, { Detail: "AuthorizationUnsuccessful" }),
+    );
+
+    const result = await createXeroInvoiceAttachment(
+      "inv-1",
+      "claims-progress.pdf",
+      "application/pdf",
+      CONTENT,
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.error).toBe("403: AuthorizationUnsuccessful");
+    expect(api.createInvoiceAttachmentByFileName).not.toHaveBeenCalled();
+    expect(api.updateInvoiceAttachmentByFileName).not.toHaveBeenCalled();
+  });
+});
