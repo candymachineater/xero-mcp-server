@@ -106,6 +106,21 @@ class CustomConnectionsXeroClient extends MCPXeroClient {
     "payroll.timesheets",
   ].join(" ");
 
+  /**
+   * Read+write attachments scope, requested as an OPTIONAL extra.
+   *
+   * getInvoiceAttachments accepts accounting.attachments OR
+   * accounting.attachments.read, but the attachment create/update operations
+   * require accounting.attachments (XeroAPI/Xero-OpenAPI
+   * xero_accounting.yaml). This server exposes both a list tool and an upload
+   * tool, so the single read+write scope covers both and we do not also ask
+   * for the read-only variant.
+   *
+   * It is never added to XERO_SCOPES and never added to the V1/V2 attempts
+   * below: see tryTokenWithAttachmentsScope().
+   */
+  private readonly XERO_ATTACHMENTS_SCOPE = "accounting.attachments";
+
   constructor(config: {
     clientId: string;
     clientSecret: string;
@@ -124,8 +139,67 @@ class CustomConnectionsXeroClient extends MCPXeroClient {
     return new Error(`Failed to get Xero token${context}: ${message}`);
   }
 
+  /**
+   * True when Xero's identity endpoint refused this particular request, as
+   * opposed to failing for an infrastructure reason.
+   *
+   * Used ONLY to decide whether to drop the optional attachments scope and
+   * carry on. We deliberately do not key that decision on the exact
+   * `invalid_scope` error code: Xero does not publicly document what a
+   * Custom Connection returns when a requested scope has not been granted,
+   * and if it ever answers with a different 4xx code then keying on
+   * `invalid_scope` alone would turn a missing attachments grant into a total
+   * authentication failure for every tool. Any 4xx other than 429 means "this
+   * request was refused", so retrying without the extra scope is the safe,
+   * bounded response. Network errors, 429 and 5xx are real failures where a
+   * different scope list cannot help, so those are rethrown immediately
+   * without any extra token requests.
+   */
+  private isScopeRequestRefused(error: unknown): boolean {
+    const status = (error as AxiosError).response?.status;
+
+    return status !== undefined && status >= 400 && status < 500 && status !== 429;
+  }
+
+  /**
+   * Optional first pass: today's default scopes PLUS accounting.attachments.
+   *
+   * Returns undefined - never throws for a refused scope request - when the
+   * connection has not been granted attachments, so the caller continues with
+   * exactly the V1 -> V2 chain that shipped before this change.
+   */
+  private async tryTokenWithAttachmentsScope(): Promise<TokenSet | undefined> {
+    const attempts = [
+      {
+        scopes: this.XERO_DEFAULT_AUTH_SCOPES_V1,
+        context: " with V1 scopes plus attachments",
+      },
+      {
+        scopes: this.XERO_DEFAULT_AUTH_SCOPES_V2,
+        context: " with V2 scopes plus attachments",
+      },
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        return await this.requestToken(
+          `${attempt.scopes} ${this.XERO_ATTACHMENTS_SCOPE}`,
+        );
+      } catch (error) {
+        if (!this.isScopeRequestRefused(error)) {
+          throw this.formatTokenError(error, attempt.context);
+        }
+        // Refused: this connection cannot have attachments on this scope
+        // list. Fall through and leave the caller in its original behaviour.
+      }
+    }
+
+    return undefined;
+  }
+
   public async getClientCredentialsToken(): Promise<TokenSet> {
-    // If XERO_SCOPES is set, use that
+    // If XERO_SCOPES is set, use that - verbatim. An explicit operator
+    // override stays an override: attachments is never appended to it.
     if (process.env.XERO_SCOPES) {                                                                                                                                                     
       try {
         return await this.requestToken(process.env.XERO_SCOPES);
@@ -134,7 +208,17 @@ class CustomConnectionsXeroClient extends MCPXeroClient {
       }
     }
 
-    // Else if XERO_SCOPES is not set, try V1 scopes first (for existing apps), fallback to V2 scopes (for new apps) only on invalid_scope error
+    // Else if XERO_SCOPES is not set, first ask for the defaults plus
+    // attachments. This is purely additive: if the connection was not granted
+    // attachments the call below returns undefined and we fall through to the
+    // unchanged chain.
+    const tokenWithAttachments = await this.tryTokenWithAttachmentsScope();
+
+    if (tokenWithAttachments !== undefined) {
+      return tokenWithAttachments;
+    }
+
+    // Unchanged: try V1 scopes first (for existing apps), fallback to V2 scopes (for new apps) only on invalid_scope error
     try {
       return await this.requestToken(this.XERO_DEFAULT_AUTH_SCOPES_V1);
     } catch (error) {
