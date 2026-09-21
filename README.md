@@ -54,9 +54,11 @@ Custom connections require different scopes depending on when they were created.
 | Custom Connection Created | Required Scopes |
 |---------------------------|-----------------|
 | Before Apr 29, 2026 | [SCOPES_V1](src/clients/xero-client.ts#L82-L90) (bundled permissions) |
-| From Apr 29, 2026 | [SCOPES_V2](src/clients/xero-client.ts#L93-L112) (granular permissions) |
+| From Apr 29, 2026 | [SCOPES_V2](src/clients/xero-client.ts#L93-L107) (granular permissions) |
 
-> **Note:** The MCP server automatically tries V1 scopes first and falls back to V2 if needed.
+> **Optional:** add [`accounting.attachments`](src/clients/xero-client.ts#L122) to your custom connection to use the invoice attachment tools (`list-invoice-attachments` and `create-invoice-attachment`). It is requested as an extra on top of the list above and is dropped automatically if your connection was not granted it, so every other tool behaves exactly the same with or without it.
+
+> **Note:** The MCP server automatically tries the attachments-inclusive scope lists first, then V1 scopes, then V2 scopes, stopping at the first list your connection accepts.
 > 
 > You can override these by setting the `XERO_SCOPES` environment variable to a space-separated list of scopes.
 
